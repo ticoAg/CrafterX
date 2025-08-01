@@ -7,7 +7,6 @@
 """
 
 from pathlib import Path
-from typing import Any
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -17,6 +16,8 @@ load_dotenv()
 
 
 def load_docs() -> list[str]:
+    # ! wget https://github.com/milvus-io/milvus-docs/releases/download/v2.4.6-preview/milvus_docs_2.4.x_en.zip
+    # ! unzip -q milvus_docs_2.4.x_en.zip -d milvus_docs
     doc_dir = Path("data")
     text_lines = []
 
@@ -29,13 +30,7 @@ def load_docs() -> list[str]:
 
 
 def emb_text(text):
-    return (
-        openai_client.embeddings.create(
-            input=text, model="netease-youdao/bce-embedding-base_v1"
-        )
-        .data[0]
-        .embedding
-    )
+    return openai_client.embeddings.create(input=text, model="netease-youdao/bce-embedding-base_v1").data[0].embedding
 
 
 def create_collection(collection_name: str):
@@ -66,17 +61,13 @@ def retrieve(query_text, collection_name: str):
 
     search_res = milvus_client.search(
         collection_name=collection_name,
-        data=[
-            emb_text(query_text)
-        ],  # Use the `emb_text` function to convert the question to an embedding vector
+        data=[emb_text(query_text)],  # Use the `emb_text` function to convert the question to an embedding vector
         limit=3,  # Return top 3 results
         search_params={"metric_type": "IP", "params": {}},  # Inner product distance
         output_fields=["text"],  # Return the text field
     )
 
-    retrieved_lines_with_distances = [
-        (res["entity"]["text"], res["distance"]) for res in search_res[0]
-    ]
+    retrieved_lines_with_distances = [(res["entity"]["text"], res["distance"]) for res in search_res[0]]
     print(json.dumps(retrieved_lines_with_distances, indent=4))
 
 
