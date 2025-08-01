@@ -9,5 +9,7 @@ wheels/
 # Virtual environments
 .venv
 .env
-.vscode
+.vscode/
 data/milvus_docs
+
+volumes/
