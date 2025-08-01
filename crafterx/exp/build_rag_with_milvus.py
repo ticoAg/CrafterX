@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import os
 import sys
 import time
 from pathlib import Path
@@ -62,7 +63,7 @@ def analyze_text_lengths(lengths: list[int]) -> None:
         lengths: 文本块长度列表
     """
     if not lengths:
-        print("没有文本块需要统计")
+        logger.warning("没有文本块需要统计")
         return
 
     # 按区间统计长度分布
@@ -84,15 +85,15 @@ def analyze_text_lengths(lengths: list[int]) -> None:
         length_distribution[bucket] = length_distribution.get(bucket, 0) + 1
 
     # 输出长度分布统计结果
-    print("文本块长度分布统计:")
+    logger.info("文本块长度分布统计:")
     for bucket in ["<128", "128-256", "256-512", "512-768", "768-1024", ">=1024"]:
         count = length_distribution.get(bucket, 0)
-        print(f"  {bucket:8}: {count} 个文本块")
+        logger.info(f"  {bucket:8}: {count} 个文本块")
 
     # 显示最大、最小和平均长度
-    print(f"最大文本块长度: {max(lengths)}")
-    print(f"最小文本块长度: {min(lengths)}")
-    print(f"平均文本块长度: {sum(lengths) / len(lengths):.2f}")
+    logger.debug(f"最大文本块长度: {max(lengths)}")
+    logger.debug(f"最小文本块长度: {min(lengths)}")
+    logger.debug(f"平均文本块长度: {sum(lengths) / len(lengths):.2f}")
 
 
 def load_docs() -> list[dict]:
@@ -109,8 +110,13 @@ def load_docs() -> list[dict]:
     all_lengths = []
 
     for file_path in doc_dir.rglob("*.md"):
-        with open(file_path, "r") as file:
-            markdown_document = file.read()
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                markdown_document = file.read()
+        except UnicodeDecodeError:
+            # 如果UTF-8解码失败，尝试使用其他编码
+            with open(file_path, "r", encoding="latin-1") as file:
+                markdown_document = file.read()
 
         text_lines = markdown_splitter.split_text(markdown_document)
         for idx, line in enumerate(text_lines):
@@ -234,6 +240,6 @@ async def main():
 
 if __name__ == "__main__":
     aopenai_client = AsyncOpenAI()
-    milvus_client = MilvusClient()
+    milvus_client = MilvusClient(uri=os.getenv("MILVUS_URI", "http://localhost:19530"))
     collection_name = "my_rag_collection"
     asyncio.run(main())
