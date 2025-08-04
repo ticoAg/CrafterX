@@ -49,3 +49,16 @@ for doc in documents:
 ## 构建RAG系统
 
 使用 `crafterx/exp/build_rag_with_milvus.py` 脚本构建基于 Milvus 的 RAG 系统。
+
+
+
+# Usage
+
+```bash
+# 环境同步
+uv sync
+# 启动api服务
+uv run poe serve_single
+
+uv run poe serve
+```

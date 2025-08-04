@@ -3,9 +3,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from crafterx.api.doc_loader_api import doc_loader_router
 from crafterx.core.Logger import logger
-
-from ..api.doc_loader_api import doc_loader_router
 
 
 @asynccontextmanager
@@ -34,8 +33,15 @@ app.add_middleware(
 app.mount("/api", doc_loader_router)
 
 
+@app.get("/")
+async def redirect_to_docs():
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse(url="/docs")
+
+
 if __name__ == "__main__":
     import uvicorn
 
     logger.info("启动服务器...")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)

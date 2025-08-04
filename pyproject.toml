@@ -26,12 +26,15 @@ dependencies = [
     "uvicorn>=0.27.1",
     "python-multipart>=0.0.9",
     "streamlit>=1.32.0",
+    "watchdog>=6.0.0",
+    "gunicorn>=23.0.0",
 ]
 
 
-[tool.poe.tasks.web]
-shell = "sh scripts/run_web.sh"
-
+[tool.poe.tasks]
+web = "sh scripts/run_web.sh"
+serve_single = "sh scripts/run_server_single.sh"
+serve = "sh scripts/run_server.sh"
 
 [dependency-groups]
 dev = [
