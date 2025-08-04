@@ -10,6 +10,10 @@ wheels/
 .venv
 .env
 .vscode/
+.idea/
+.lingma/
 data/milvus_docs
 
 volumes/
+logs/
+placeholder
