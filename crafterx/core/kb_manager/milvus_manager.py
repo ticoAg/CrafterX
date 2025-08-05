@@ -5,6 +5,7 @@ from loguru import logger
 from pymilvus import MilvusClient
 from pymilvus.orm.schema import CollectionSchema
 
+from ..Logger import logger
 from .doc_schema import get_doc_meta_schema
 
 
@@ -31,26 +32,9 @@ class AsyncMilvusManager:
             password: 密码（如果启用了认证）
             connection_alias: 连接别名
         """
-        # 构建 URI
         self.uri = f"http://{host}:{port}" if not user or not password else f"http://{user}:{password}@{host}:{port}"
-
-        # 初始化 MilvusClient
         self.client = MilvusClient(uri=self.uri)
-
-        # 保存连接参数用于日志
-        self.connection_params = {"host": host, "port": port}
-
-    async def _connect(self) -> None:
-        """建立与 Milvus 服务器的连接"""
-        try:
-            # MilvusClient 会在第一次操作时自动连接，这里仅作验证
-            self.client.list_collections()
-            logger.info(
-                f"Successfully connected to Milvus server at {self.connection_params['host']}:{self.connection_params['port']}"
-            )
-        except Exception as e:
-            logger.exception(f"Failed to connect to Milvus: {e}")
-            raise
+        logger.info(f"MilvusManager initialized for URI: {host}:{port}. Connection will be established on first use.")
 
     async def create_collection(
         self,

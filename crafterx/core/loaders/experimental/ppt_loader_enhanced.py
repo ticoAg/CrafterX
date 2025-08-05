@@ -18,32 +18,18 @@ import asyncio
 import base64
 import json
 import os
-from typing import Dict, List, Tuple, Any
+
+# 假设项目中有一个统一的Logger配置
+from logging import getLogger
+from typing import Any, Dict, List, Tuple
 
 import openai
 from langchain_community.document_loaders import UnstructuredPowerPointLoader
 from pptx import Presentation
 
-# 假设项目中有一个统一的Logger配置
-from logging import getLogger
+from ..base import BaseLoader, Document
+
 logger = getLogger(__name__)
-
-
-class Document:
-    """一个简化的数据结构，用于模仿LangChain的Document，用于演示目的。"""
-    def __init__(self, page_content: str, metadata: dict):
-        self.page_content = page_content
-        self.metadata = metadata
-
-    def __repr__(self):
-        return f"Document(page_content='{self.page_content[:50]}...', metadata={self.metadata})"
-
-
-class BaseLoader:
-    """加载器的基类，用于定义通用接口和辅助函数。"""
-    def validate_file(self, file_path: str) -> bool:
-        """检查文件是否存在且非空。"""
-        return os.path.exists(file_path) and os.path.getsize(file_path) > 0
 
 
 class EnhancedPPTLoader(BaseLoader):
@@ -62,7 +48,7 @@ class EnhancedPPTLoader(BaseLoader):
         "4. **图文关系**：结合下方提供的幻灯片文本，分析视觉内容与文本信息是如何相互支持或补充的。"
         "请使用中文以Markdown格式清晰地回答。"
     )
-    
+
     DEFAULT_QA_PROMPT_TEMPLATE = """
     你是一个出色的问答生成器。基于以下单张PPT幻灯片的文本和视觉分析内容，生成{num_qa_pairs}个高质量的问答对(QA对)。
     要求：
@@ -113,14 +99,14 @@ class EnhancedPPTLoader(BaseLoader):
             max_tokens_qa: QA生成任务的最大token数。
             vision_prompt: 自定义视觉分析的prompt。
             qa_prompt_template: 自定义QA生成的prompt模板。
-        
+
         Raises:
             ValueError: 如果无法找到OpenAI API密钥。
         """
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OpenAI API key is required. Please provide it or set the OPENAI_API_KEY environment variable.")
-        
+
         self.openai_client = openai.OpenAI(api_key=api_key)
         self.vision_model = vision_model
         self.qa_model = qa_model
@@ -169,7 +155,7 @@ class EnhancedPPTLoader(BaseLoader):
         logger.info("正在提取文本内容...")
         loader = UnstructuredPowerPointLoader(file_path, mode="elements")
         documents = loader.load()
-        
+
         # 将文本内容按幻灯片页码聚合
         slide_texts: Dict[int, str] = {}
         for doc in documents:
@@ -182,14 +168,16 @@ class EnhancedPPTLoader(BaseLoader):
         # 为每张幻灯片的聚合文本创建一个Document
         text_documents = []
         for slide_num, content in slide_texts.items():
-            text_documents.append(Document(
-                page_content=content.strip(),
-                metadata={
-                    "source_file": os.path.basename(file_path),
-                    "slide_number": slide_num,
-                    "content_type": "text",
-                },
-            ))
+            text_documents.append(
+                Document(
+                    page_content=content.strip(),
+                    metadata={
+                        "source_file": os.path.basename(file_path),
+                        "slide_number": slide_num,
+                        "content_type": "text",
+                    },
+                )
+            )
         return text_documents
 
     def _render_slide_as_image(self, slide: Any, slide_index: int) -> Tuple[bytes, str]:
@@ -220,7 +208,7 @@ class EnhancedPPTLoader(BaseLoader):
         logger.info("正在分析幻灯片的视觉内容...")
         prs = Presentation(file_path)
         vision_docs = []
-        
+
         # 创建一个从幻灯片号到文本内容的映射
         slide_text_map = {doc.metadata["slide_number"]: doc.page_content for doc in text_documents}
 
@@ -240,7 +228,7 @@ class EnhancedPPTLoader(BaseLoader):
                 #         "analysis_source": "full_slide_render",
                 #     },
                 # ))
-                
+
                 # 策略2：作为备用方案，提取幻灯片中嵌入的图片进行分析
                 # 如果您无法实现渲染，可以取消下面的注释来使用此策略
                 embedded_images = self._extract_images_from_slide(slide)
@@ -250,23 +238,25 @@ class EnhancedPPTLoader(BaseLoader):
                 # 此处只分析第一张有意义的图片，避免信息冗余
                 image_data, image_format = embedded_images[0]
                 analysis = self._analyze_image_with_vision_model(image_data, slide_text_map.get(slide_num, ""))
-                vision_docs.append(Document(
-                    page_content=analysis,
-                    metadata={
-                        "source_file": os.path.basename(file_path),
-                        "slide_number": slide_num,
-                        "content_type": "slide_visual_analysis",
-                        "analysis_source": "embedded_image",
-                        "image_format": image_format,
-                    },
-                ))
+                vision_docs.append(
+                    Document(
+                        page_content=analysis,
+                        metadata={
+                            "source_file": os.path.basename(file_path),
+                            "slide_number": slide_num,
+                            "content_type": "slide_visual_analysis",
+                            "analysis_source": "embedded_image",
+                            "image_format": image_format,
+                        },
+                    )
+                )
 
             except NotImplementedError:
                 logger.warning(f"幻灯片 {slide_num} 渲染功能未实现，跳过视觉分析。")
                 # 如果您只想用备用策略，请注释掉 raise 语句并取消上方策略2的注释。
             except Exception as e:
                 logger.error(f"处理幻灯片 {slide_num} 的视觉内容时出错: {e}", exc_info=True)
-                
+
         return vision_docs
 
     def _extract_images_from_slide(self, slide: Any) -> List[Tuple[bytes, str]]:
@@ -277,7 +267,7 @@ class EnhancedPPTLoader(BaseLoader):
                 try:
                     image_part = rel.target_part
                     image_data = image_part.blob
-                    image_format = image_part.content_type.split('/')[-1]
+                    image_format = image_part.content_type.split("/")[-1]
                     images.append((image_data, image_format))
                 except Exception as e:
                     logger.warning(f"提取图片时出错: {e}")
@@ -286,24 +276,24 @@ class EnhancedPPTLoader(BaseLoader):
     def _analyze_image_with_vision_model(self, image_data: bytes, slide_text_content: str) -> str:
         """使用视觉大模型分析图片内容，并结合文本上下文。"""
         image_base64 = base64.b64encode(image_data).decode("utf-8")
-        
+
         prompt_text = self.vision_prompt
         if slide_text_content:
             prompt_text += f"\n\n附加的幻灯片文本内容参考：\n---\n{slide_text_content}"
 
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt_text},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
-            ],
-        }]
-        
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
+                ],
+            }
+        ]
+
         try:
             response = self.openai_client.chat.completions.create(
-                model=self.vision_model,
-                messages=messages,
-                max_tokens=self.max_tokens_vision
+                model=self.vision_model, messages=messages, max_tokens=self.max_tokens_vision
             )
             return response.choices[0].message.content
         except openai.RateLimitError as e:
@@ -317,7 +307,7 @@ class EnhancedPPTLoader(BaseLoader):
         """基于所有文档内容，为每张幻灯片生成QA对。"""
         logger.info("正在生成QA对...")
         qa_documents = []
-        
+
         # 按幻灯片编号对所有内容（文本+视觉分析）进行分组
         slide_contexts: Dict[int, str] = {}
         for doc in documents:
@@ -326,7 +316,7 @@ class EnhancedPPTLoader(BaseLoader):
                 if slide_num not in slide_contexts:
                     slide_contexts[slide_num] = ""
                 slide_contexts[slide_num] += f"## 内容来源: {doc.metadata['content_type']} ##\n{doc.page_content}\n\n"
-        
+
         for slide_num, context in slide_contexts.items():
             try:
                 qa_list = self._create_qa_for_slide(context, slide_num)
@@ -334,22 +324,19 @@ class EnhancedPPTLoader(BaseLoader):
             except Exception as e:
                 logger.error(f"为幻灯片 {slide_num} 生成QA对失败: {e}", exc_info=True)
                 # 即使失败，也继续处理下一张幻灯片
-                
+
         return qa_documents
 
     def _create_qa_for_slide(self, slide_context: str, slide_num: int) -> List[Document]:
         """为单个幻灯片的聚合内容创建QA对。"""
-        prompt = self.qa_prompt_template.format(
-            num_qa_pairs=self.num_qa_pairs,
-            slide_context=slide_context
-        )
-        
+        prompt = self.qa_prompt_template.format(num_qa_pairs=self.num_qa_pairs, slide_context=slide_context)
+
         try:
             response = self.openai_client.chat.completions.create(
                 model=self.qa_model,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
-                max_tokens=self.max_tokens_qa
+                max_tokens=self.max_tokens_qa,
             )
             # OpenAI的JSON模式有时会把列表包在一个键里，例如 {"qa_pairs": [...] }
             # 这里做一些兼容性处理
@@ -366,40 +353,42 @@ class EnhancedPPTLoader(BaseLoader):
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"解析为幻灯片 {slide_num} 生成的QA JSON失败: {e}. 尝试备用方案。")
             return self._fallback_qa_generation(slide_context, slide_num)
-        
+
         qa_documents = []
         for i, qa_item in enumerate(qa_list):
             if "question" not in qa_item or "answer" not in qa_item:
                 logger.warning(f"幻灯片 {slide_num} 的一个QA对格式不正确，已跳过: {qa_item}")
                 continue
-                
+
             qa_doc = Document(
                 page_content=f"Q: {qa_item['question']}\nA: {qa_item['answer']}",
                 metadata={
                     "slide_number": slide_num,
                     "content_type": "qa_pair",
                     "qa_index": i + 1,
-                    "question": qa_item['question'],
-                    "answer": qa_item['answer'],
+                    "question": qa_item["question"],
+                    "answer": qa_item["answer"],
                     "source": "generated_qa",
                 },
             )
             qa_documents.append(qa_doc)
-            
+
         return qa_documents
 
     def _fallback_qa_generation(self, context: str, slide_num: int) -> List[Document]:
         """当主QA生成方案失败时的备用方案，生成一个总结性问题。"""
         logger.info(f"正在为幻灯片 {slide_num} 执行备用QA生成...")
-        return [Document(
-            page_content=f"Q: 请总结幻灯片 {slide_num} 的核心内容。\nA: 这张幻灯片的主要内容摘要如下：{context[:500]}...",
-            metadata={
-                "slide_number": slide_num,
-                "content_type": "qa_pair",
-                "qa_index": 1,
-                "source": "fallback_qa_summary",
-            },
-        )]
+        return [
+            Document(
+                page_content=f"Q: 请总结幻灯片 {slide_num} 的核心内容。\nA: 这张幻灯片的主要内容摘要如下：{context[:500]}...",
+                metadata={
+                    "slide_number": slide_num,
+                    "content_type": "qa_pair",
+                    "qa_index": 1,
+                    "source": "fallback_qa_summary",
+                },
+            )
+        ]
 
 
 class AsyncEnhancedPPTLoader(EnhancedPPTLoader):
@@ -441,13 +430,13 @@ class AsyncEnhancedPPTLoader(EnhancedPPTLoader):
         except Exception as e:
             logger.error(f"[AsyncEnhancedPPTLoader] 处理PPT文件 '{file_path}' 时发生未知错误: {e}", exc_info=True)
             raise
-    
+
     async def _async_process_all_slides(self, file_path: str, text_documents: List[Document]) -> List[Document]:
         """并发处理所有幻灯片的视觉分析。"""
         logger.info("正在并发分析幻灯片的视觉内容...")
         prs = Presentation(file_path)
         slide_text_map = {doc.metadata["slide_number"]: doc.page_content for doc in text_documents}
-        
+
         tasks = []
         for i, slide in enumerate(prs.slides):
             slide_num = i + 1
@@ -459,7 +448,7 @@ class AsyncEnhancedPPTLoader(EnhancedPPTLoader):
                 slide_text = slide_text_map.get(slide_num, "")
                 task = self._async_analyze_image(image_data, image_format, slide_num, slide_text, os.path.basename(file_path))
                 tasks.append(task)
-        
+
         vision_docs = []
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for res in results:
@@ -469,13 +458,13 @@ class AsyncEnhancedPPTLoader(EnhancedPPTLoader):
                 logger.error(f"一个异步视觉分析任务失败: {res}")
         return vision_docs
 
-    async def _async_analyze_image(self, image_data: bytes, image_format: str, slide_num: int, slide_text: str, filename: str) -> Document:
+    async def _async_analyze_image(
+        self, image_data: bytes, image_format: str, slide_num: int, slide_text: str, filename: str
+    ) -> Document:
         """异步调用视觉模型分析单张图片。"""
         loop = asyncio.get_event_loop()
         # 使用run_in_executor在线程池中运行同步的SDK调用，防止阻塞事件循环
-        analysis = await loop.run_in_executor(
-            None, self._analyze_image_with_vision_model, image_data, slide_text
-        )
+        analysis = await loop.run_in_executor(None, self._analyze_image_with_vision_model, image_data, slide_text)
         return Document(
             page_content=analysis,
             metadata={
@@ -486,7 +475,7 @@ class AsyncEnhancedPPTLoader(EnhancedPPTLoader):
                 "image_format": image_format,
             },
         )
-        
+
     async def _async_generate_all_qa_pairs(self, documents: List[Document]) -> List[Document]:
         """并发为所有幻灯片生成QA对。"""
         logger.info("正在并发生成QA对...")
@@ -499,7 +488,7 @@ class AsyncEnhancedPPTLoader(EnhancedPPTLoader):
                 slide_contexts[slide_num] += f"## 内容来源: {doc.metadata['content_type']} ##\n{doc.page_content}\n\n"
 
         tasks = [self._async_create_qa_for_slide(ctx, num) for num, ctx in slide_contexts.items()]
-        
+
         qa_documents = []
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for res in results:
@@ -513,9 +502,7 @@ class AsyncEnhancedPPTLoader(EnhancedPPTLoader):
         """异步为单个幻灯片创建QA对。"""
         loop = asyncio.get_event_loop()
         # 同样使用线程池运行同步的SDK调用
-        return await loop.run_in_executor(
-            None, self._create_qa_for_slide, slide_context, slide_num
-        )
+        return await loop.run_in_executor(None, self._create_qa_for_slide, slide_context, slide_num)
 
 
 # # ================== 示例用法 ==================

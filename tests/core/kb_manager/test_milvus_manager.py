@@ -1,133 +1,271 @@
-import os
-import random
-import sys
-from pathlib import Path
-from unittest.mock import patch
+# tests/core/kb_manager/test_milvus_manager.py
+import asyncio
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
-import pytest
-from pymilvus import Collection
-
-sys.path.append(Path(__file__).parents[3].as_posix())
-from dotenv import load_dotenv
+from pymilvus import MilvusClient
 
 from crafterx.core.kb_manager.milvus_manager import AsyncMilvusManager
 
-load_dotenv()
 
-
-@pytest.mark.asyncio
-class TestAsyncMilvusManager:
-    """AsyncMilvusManager 类的单元测试"""
-
-    def setup_method(self):
-        """测试前设置"""
-        self.host = os.environ.get("MILVUS_HOST", "localhost")
-        self.port = os.environ.get("MILVUS_PORT", "19530")
-        self.test_collection_name = f"test_collection_{random.randint(1000, 9999)}"
+class TestAsyncMilvusManager(unittest.TestCase):
+    def setUp(self):
+        """在每个测试之前设置环境"""
+        self.host = "localhost"
+        self.port = "19530"
+        self.collection_name = "test_collection"
         self.dim = 128
-        self.manager = AsyncMilvusManager(host=self.host, port=self.port, connection_alias="test_alias")
 
-    async def teardown_method(self):
-        """测试后清理"""
-        # 删除测试集合
-        if await self.manager.has_collection(self.test_collection_name):
-            await self.manager.drop_collection(self.test_collection_name)
+        with patch("crafterx.core.kb_manager.milvus_manager.MilvusClient") as mock_client:
+            self.milvus_manager = AsyncMilvusManager(host=self.host, port=self.port)
+            self.mock_client = mock_client.return_value
+            self.milvus_manager.client = self.mock_client
 
-    async def test_connect(self):
-        """测试连接Milvus服务器"""
-        # 测试成功连接
-        with patch("pymilvus.connections.connect") as mock_connect:
-            mock_connect.return_value = True
-            await self.manager._connect()
-            mock_connect.assert_called_once_with(alias="test_alias", host=self.host, port=self.port, _async=True)
+    def test_init(self):
+        """测试初始化"""
+        with patch("crafterx.core.kb_manager.milvus_manager.MilvusClient") as mock_client:
+            manager = AsyncMilvusManager(host="test_host", port="19540")
+            mock_client.assert_called_once_with(uri="http://test_host:19540")
 
-        # 测试连接失败
-        with patch("pymilvus.connections.connect") as mock_connect:
-            mock_connect.side_effect = Exception("Connection failed")
-            with pytest.raises(Exception, match="Connection failed"):
-                await self.manager._connect()
+    @patch("crafterx.core.kb_manager.milvus_manager.get_doc_meta_schema")
+    def test_create_collection_success(self, mock_get_schema):
+        """测试成功创建集合"""
+        mock_schema = MagicMock()
+        mock_get_schema.return_value = mock_schema
+        self.mock_client.has_collection.return_value = False
 
-    async def test_create_collection(self):
-        """测试创建集合"""
-        # 测试创建新集合
-        collection = await self.manager.create_collection(collection_name=self.test_collection_name, dim=self.dim)
-        assert isinstance(collection, Collection)
-        assert collection.name == self.test_collection_name
+        mock_index_params = MagicMock()
+        self.mock_client.prepare_index_params.return_value = mock_index_params
 
-        # 测试创建已存在的集合
-        with patch("loguru.logger.warning") as mock_warning:
-            collection = await self.manager.create_collection(collection_name=self.test_collection_name, dim=self.dim)
-            mock_warning.assert_called_once_with(f"Collection {self.test_collection_name} already exists")
+        async def run_test():
+            await self.milvus_manager.create_collection(
+                collection_name=self.collection_name, dim=self.dim, description="Test collection"
+            )
 
-    async def test_has_collection(self):
+            self.mock_client.has_collection.assert_called_once_with(collection_name=self.collection_name)
+            mock_get_schema.assert_called_once()
+            self.mock_client.prepare_index_params.assert_called_once()
+            mock_index_params.add_index.assert_called_once_with(
+                field_name="dense_vector", index_name="dense_vector_index", index_type="AUTOINDEX", metric_type="IP"
+            )
+            self.mock_client.create_collection.assert_called_once()
+
+        asyncio.run(run_test())
+
+    def test_create_collection_already_exists(self):
+        """测试创建已存在的集合"""
+        self.mock_client.has_collection.return_value = True
+
+        async def run_test():
+            await self.milvus_manager.create_collection(collection_name=self.collection_name, dim=self.dim)
+
+            self.mock_client.has_collection.assert_called_once_with(collection_name=self.collection_name)
+            self.mock_client.create_collection.assert_not_called()
+
+        asyncio.run(run_test())
+
+    def test_create_collection_exception(self):
+        """测试创建集合时发生异常"""
+        self.mock_client.has_collection.return_value = False
+        self.mock_client.create_collection.side_effect = Exception("Connection failed")
+
+        async def run_test():
+            with self.assertRaises(Exception):
+                await self.milvus_manager.create_collection(collection_name=self.collection_name, dim=self.dim)
+
+        asyncio.run(run_test())
+
+    def test_has_collection_success(self):
         """测试检查集合是否存在"""
-        # 测试不存在的集合
-        assert not await self.manager.has_collection("non_existent_collection")
+        self.mock_client.has_collection.return_value = True
 
-        # 测试存在的集合
-        await self.manager.create_collection(collection_name=self.test_collection_name, dim=self.dim)
-        assert await self.manager.has_collection(self.test_collection_name)
+        async def run_test():
+            result = await self.milvus_manager.has_collection(self.collection_name)
+            self.assertTrue(result)
+            self.mock_client.has_collection.assert_called_once_with(collection_name=self.collection_name)
 
-    async def test_drop_collection(self):
-        """测试删除集合"""
-        # 测试删除不存在的集合
-        with patch("loguru.logger.warning") as mock_warning:
-            await self.manager.drop_collection("non_existent_collection")
-            mock_warning.assert_called_once_with("Collection non_existent_collection does not exist")
+        asyncio.run(run_test())
 
-        # 测试删除存在的集合
-        await self.manager.create_collection(collection_name=self.test_collection_name, dim=self.dim)
-        assert await self.manager.has_collection(self.test_collection_name)
-        await self.manager.drop_collection(self.test_collection_name)
-        assert not await self.manager.has_collection(self.test_collection_name)
+    def test_has_collection_exception(self):
+        """测试检查集合时发生异常"""
+        self.mock_client.has_collection.side_effect = Exception("Connection error")
 
-    async def test_list_collections(self):
+        async def run_test():
+            with self.assertRaises(Exception):
+                await self.milvus_manager.has_collection(self.collection_name)
+
+        asyncio.run(run_test())
+
+    def test_drop_collection_success(self):
+        """测试成功删除集合"""
+        self.mock_client.has_collection.return_value = True
+
+        async def run_test():
+            await self.milvus_manager.drop_collection(self.collection_name)
+            self.mock_client.has_collection.assert_called_once_with(collection_name=self.collection_name)
+            self.mock_client.drop_collection.assert_called_once_with(collection_name=self.collection_name)
+
+        asyncio.run(run_test())
+
+    def test_drop_collection_not_exists(self):
+        """测试删除不存在的集合"""
+        self.mock_client.has_collection.return_value = False
+
+        async def run_test():
+            await self.milvus_manager.drop_collection(self.collection_name)
+            self.mock_client.has_collection.assert_called_once_with(collection_name=self.collection_name)
+            self.mock_client.drop_collection.assert_not_called()
+
+        asyncio.run(run_test())
+
+    def test_drop_collection_exception(self):
+        """测试删除集合时发生异常"""
+        self.mock_client.has_collection.return_value = True
+        self.mock_client.drop_collection.side_effect = Exception("Delete failed")
+
+        async def run_test():
+            with self.assertRaises(Exception):
+                await self.milvus_manager.drop_collection(self.collection_name)
+
+        asyncio.run(run_test())
+
+    def test_list_collections_success(self):
         """测试列出所有集合"""
-        # 先创建一个测试集合
-        await self.manager.create_collection(collection_name=self.test_collection_name, dim=self.dim)
+        expected_collections = ["collection1", "collection2", "collection3"]
+        self.mock_client.list_collections.return_value = expected_collections
 
-        # 测试列出集合
-        collections = await self.manager.list_collections()
-        assert self.test_collection_name in collections
+        async def run_test():
+            result = await self.milvus_manager.list_collections()
+            self.assertEqual(result, expected_collections)
+            self.mock_client.list_collections.assert_called_once()
 
-    async def test_insert(self):
-        """测试插入向量"""
-        # 先创建集合
-        await self.manager.create_collection(collection_name=self.test_collection_name, dim=self.dim)
+        asyncio.run(run_test())
 
-        # 准备测试数据
-        num_vectors = 10
-        vectors = np.random.random((num_vectors, self.dim)).tolist()
+    def test_list_collections_exception(self):
+        """测试列出集合时发生异常"""
+        self.mock_client.list_collections.side_effect = Exception("List failed")
 
-        # 测试插入向量
-        inserted_ids = await self.manager.insert(collection_name=self.test_collection_name, vectors=vectors)
-        assert len(inserted_ids) == num_vectors
+        async def run_test():
+            with self.assertRaises(Exception):
+                await self.milvus_manager.list_collections()
 
-        # 测试插入带ID的向量
-        vectors_with_ids = np.random.random((num_vectors, self.dim)).tolist()
-        ids = [i + 1000 for i in range(num_vectors)]
+        asyncio.run(run_test())
 
-        inserted_ids_with_ids = await self.manager.insert(
-            collection_name=self.test_collection_name, vectors=vectors_with_ids, ids=ids
-        )
-        assert len(inserted_ids_with_ids) == num_vectors
-        assert inserted_ids_with_ids == ids
+    def test_insert_success(self):
+        """测试成功插入数据"""
+        test_data = [{"id": 1, "vector": [0.1] * self.dim}, {"id": 2, "vector": [0.2] * self.dim}]
+        expected_result = {"insert_count": 2}
+        self.mock_client.insert.return_value = expected_result
 
-    async def test_insert_with_numpy_array(self):
-        """测试使用numpy数组插入向量"""
-        # 先创建集合
-        await self.manager.create_collection(collection_name=self.test_collection_name, dim=self.dim)
+        async def run_test():
+            result = await self.milvus_manager.insert(collection_name=self.collection_name, data=test_data)
+            self.assertEqual(result, expected_result)
+            self.mock_client.insert.assert_called_once_with(collection_name=self.collection_name, data=test_data, timeout=None)
 
-        # 准备测试数据
-        num_vectors = 5
-        vectors = np.random.random((num_vectors, self.dim))
+        asyncio.run(run_test())
 
-        # 测试插入numpy数组
-        inserted_ids = await self.manager.insert(collection_name=self.test_collection_name, vectors=vectors)
-        assert len(inserted_ids) == num_vectors
+    def test_insert_exception(self):
+        """测试插入数据时发生异常"""
+        test_data = [{"id": 1, "vector": [0.1] * self.dim}]
+        self.mock_client.insert.side_effect = Exception("Insert failed")
+
+        async def run_test():
+            with self.assertRaises(Exception):
+                await self.milvus_manager.insert(collection_name=self.collection_name, data=test_data)
+
+        asyncio.run(run_test())
+
+    def test_delete_success(self):
+        """测试成功删除数据"""
+        expr = "id in [1, 2, 3]"
+        expected_result = {"delete_count": 3}
+        self.mock_client.delete.return_value = expected_result
+
+        async def run_test():
+            result = await self.milvus_manager.delete(collection_name=self.collection_name, expr=expr)
+            self.assertEqual(result, expected_result)
+            self.mock_client.delete.assert_called_once_with(collection_name=self.collection_name, filter=expr, timeout=None)
+
+        asyncio.run(run_test())
+
+    def test_delete_exception(self):
+        """测试删除数据时发生异常"""
+        expr = "id in [1, 2, 3]"
+        self.mock_client.delete.side_effect = Exception("Delete failed")
+
+        async def run_test():
+            with self.assertRaises(Exception):
+                await self.milvus_manager.delete(collection_name=self.collection_name, expr=expr)
+
+        asyncio.run(run_test())
+
+    def test_search_with_list_data(self):
+        """测试使用列表数据进行搜索"""
+        query_vectors = [[0.1] * self.dim, [0.2] * self.dim]
+        expected_result = [[{"id": 1, "distance": 0.9}]]
+        self.mock_client.search.return_value = expected_result
+
+        async def run_test():
+            result = await self.milvus_manager.search(collection_name=self.collection_name, data=query_vectors, limit=5)
+            self.assertEqual(result, expected_result)
+            self.mock_client.search.assert_called_once()
+
+        asyncio.run(run_test())
+
+    def test_search_with_numpy_data(self):
+        """测试使用numpy数组进行搜索"""
+        query_vectors = np.array([[0.1] * self.dim])
+        expected_result = [[{"id": 1, "distance": 0.9}]]
+        self.mock_client.search.return_value = expected_result
+
+        async def run_test():
+            result = await self.milvus_manager.search(collection_name=self.collection_name, data=query_vectors, limit=5)
+            self.assertEqual(result, expected_result)
+            self.mock_client.search.assert_called_once()
+
+        asyncio.run(run_test())
+
+    def test_search_exception(self):
+        """测试搜索时发生异常"""
+        query_vectors = [[0.1] * self.dim]
+        self.mock_client.search.side_effect = Exception("Search failed")
+
+        async def run_test():
+            with self.assertRaises(Exception):
+                await self.milvus_manager.search(collection_name=self.collection_name, data=query_vectors)
+
+        asyncio.run(run_test())
+
+    def test_query_success(self):
+        """测试成功查询数据"""
+        expr = "id > 0"
+        output_fields = ["id", "vector"]
+        expected_result = [{"id": 1, "vector": [0.1] * self.dim}]
+        self.mock_client.query.return_value = expected_result
+
+        async def run_test():
+            result = await self.milvus_manager.query(
+                collection_name=self.collection_name, expr=expr, output_fields=output_fields
+            )
+            self.assertEqual(result, expected_result)
+            self.mock_client.query.assert_called_once_with(
+                collection_name=self.collection_name, filter=expr, output_fields=output_fields, timeout=None
+            )
+
+        asyncio.run(run_test())
+
+    def test_query_exception(self):
+        """测试查询数据时发生异常"""
+        expr = "id > 0"
+        self.mock_client.query.side_effect = Exception("Query failed")
+
+        async def run_test():
+            with self.assertRaises(Exception):
+                await self.milvus_manager.query(collection_name=self.collection_name, expr=expr)
+
+        asyncio.run(run_test())
 
 
-# 运行测试
 if __name__ == "__main__":
-    pytest.main([__file__])
+    unittest.main()

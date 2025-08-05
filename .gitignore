@@ -12,8 +12,9 @@ wheels/
 .vscode/
 .idea/
 .lingma/
-data/milvus_docs
+data/
 
 volumes/
 logs/
 placeholder
+.DS_Store

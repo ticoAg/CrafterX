@@ -2,8 +2,8 @@ from typing import List
 
 from langchain_community.document_loaders import PyMuPDFLoader
 
-from ..Logger import logger
-from ._base_base import BaseLoader, Document
+from ...Logger import logger
+from ..base import BaseLoader, Document
 
 
 class PDFLoader(BaseLoader):

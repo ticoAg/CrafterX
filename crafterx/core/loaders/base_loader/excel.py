@@ -2,8 +2,8 @@ from typing import List
 
 import pandas as pd
 
-from ..Logger import logger
-from ._base_base import BaseLoader, Document
+from ...Logger import logger
+from ..base import BaseLoader, Document
 
 
 class ExcelLoader(BaseLoader):
@@ -16,9 +16,7 @@ class ExcelLoader(BaseLoader):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         excel_file = pd.ExcelFile(file_path)
-        logger.info(
-            f"[ExcelLoader] 发现 {len(excel_file.sheet_names)} 个sheet: {excel_file.sheet_names}"
-        )
+        logger.info(f"[ExcelLoader] 发现 {len(excel_file.sheet_names)} 个sheet: {excel_file.sheet_names}")
         documents = []
 
         for sheet_name in excel_file.sheet_names:
@@ -31,9 +29,7 @@ class ExcelLoader(BaseLoader):
                 "column_count": len(df.columns),
             }
             documents.append(Document(page_content=content, metadata=metadata))
-            logger.debug(
-                f"[ExcelLoader] sheet: {sheet_name}, 行数: {len(df)}, 列数: {len(df.columns)}"
-            )
+            logger.debug(f"[ExcelLoader] sheet: {sheet_name}, 行数: {len(df)}, 列数: {len(df.columns)}")
 
         logger.info(f"[ExcelLoader] 加载完成，共 {len(documents)} 个文档")
         return documents

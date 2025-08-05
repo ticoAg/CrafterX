@@ -2,20 +2,20 @@ from pathlib import Path
 from typing import Dict, Type
 
 from ..Logger import logger
-from ._base_base import BaseLoader
-from .excel_loader import ExcelLoader
-from .markdown_loader import MarkdownLoader
-from .pdf_loader import PDFLoader
-from .ppt_loader import PPTLoader
-from .ppt_loader_enhanced import EnhancedPPTLoader
-from .text_loader import TextLoader
-from .word_loader import WordLoader
+from .base import BaseLoader, Document
+from .base_loader.excel import ExcelLoader
+from .base_loader.md import MarkdownLoader
+from .base_loader.pdf import PDFLoader
+from .base_loader.ppt import PPTLoader
+from .base_loader.text import TextLoader
+from .base_loader.word import WordLoader
+from .experimental import EnhancedPPTLoader
 
 
 class DocumentLoaderFactory:
     """文档加载器工厂类"""
 
-    _loaders: Dict[str, Type[BaseLoader]] = {
+    _loaders: dict[str, Type[BaseLoader]] = {
         ".txt": TextLoader,
         ".pdf": PDFLoader,
         ".doc": WordLoader,
@@ -27,7 +27,7 @@ class DocumentLoaderFactory:
         ".md": MarkdownLoader,
     }
 
-    _enhanced_loaders: Dict[str, Type[BaseLoader]] = {
+    _enhanced_loaders: dict[str, Type[BaseLoader]] = {
         ".ppt": EnhancedPPTLoader,
         ".pptx": EnhancedPPTLoader,
     }

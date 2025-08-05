@@ -17,4 +17,4 @@ RUN pip install --upgrade pip \
 EXPOSE 8000
 
 # 启动命令，使用已配置的脚本
-CMD ["/bin/bash", "scripts/run_api.sh"]
+CMD ["/bin/bash", "scripts/run_server.sh"]
