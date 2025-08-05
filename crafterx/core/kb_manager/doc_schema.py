@@ -16,8 +16,10 @@ from pymilvus import CollectionSchema, DataType, FieldSchema
 """
 
 
-def get_doc_meta_schema() -> CollectionSchema:
+def get_doc_meta_schema(dim: int = 768) -> CollectionSchema:
     """获取文档元数据的Schema定义
+    Args:
+        dim (int, optional): 向量的维度. Defaults to 768.
     Returns:
         CollectionSchema: 文档元数据的Milvus集合schema
     """
@@ -35,6 +37,12 @@ def get_doc_meta_schema() -> CollectionSchema:
             name="activate",
             dtype=DataType.BOOL,
             description="文档是否可用于检索",
+        ),
+        FieldSchema(
+            name="dense_vector",
+            dtype=DataType.FLOAT_VECTOR,
+            dim=dim,
+            description="dense向量",
         ),
         # 用户相关信息
         FieldSchema(
@@ -71,7 +79,7 @@ def get_doc_meta_schema() -> CollectionSchema:
             name="doc_rel_ids",
             dtype=DataType.ARRAY,
             element_type=DataType.VARCHAR,
-            max_length_per_element=128,
+            max_length=128,
             max_capacity=50,
             description="相关文档ID列表",
         ),

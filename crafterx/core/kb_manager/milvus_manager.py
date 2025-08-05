@@ -1,14 +1,9 @@
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, cast
 
 import numpy as np
 from loguru import logger
-from pymilvus import (
-    Collection,
-    DataType,
-    FieldSchema,
-    connections,
-    utility,
-)
+from pymilvus import MilvusClient
+from pymilvus.orm.schema import CollectionSchema
 
 from .doc_schema import get_doc_meta_schema
 
@@ -36,42 +31,34 @@ class AsyncMilvusManager:
             password: 密码（如果启用了认证）
             connection_alias: 连接别名
         """
-        self.connection_alias = connection_alias
-        self.connection_params = {
-            "host": host,
-            "port": port,
-        }
-        if user and password:
-            self.connection_params.update({"user": user, "password": password})
+        # 构建 URI
+        self.uri = f"http://{host}:{port}" if not user or not password else f"http://{user}:{password}@{host}:{port}"
 
-        # 注意:__init__不能是异步的,所以我们只在这里配置连接参数
-        # 实际连接会在第一次使用时建立
+        # 初始化 MilvusClient
+        self.client = MilvusClient(uri=self.uri)
+
+        # 保存连接参数用于日志
+        self.connection_params = {"host": host, "port": port}
 
     async def _connect(self) -> None:
         """建立与 Milvus 服务器的连接"""
         try:
-            connections.connect(
-                alias=self.connection_alias,
-                **self.connection_params,
-                _async=True,  # 使用异步连接
-            )
+            # MilvusClient 会在第一次操作时自动连接，这里仅作验证
+            self.client.list_collections()
             logger.info(
                 f"Successfully connected to Milvus server at {self.connection_params['host']}:{self.connection_params['port']}"
             )
         except Exception as e:
-            logger.error(f"Failed to connect to Milvus: {str(e)}")
+            logger.exception(f"Failed to connect to Milvus: {e}")
             raise
 
     async def create_collection(
         self,
         collection_name: str,
         dim: int,
-        primary_field: str = "id",
-        vector_field: str = "embedding",
         description: str = "",
-        auto_id: bool = False,
         timeout: Optional[float] = None,
-    ) -> Collection:
+    ) -> None:
         """
         创建新的集合
 
@@ -81,36 +68,35 @@ class AsyncMilvusManager:
             primary_field: 主键字段名称
             vector_field: 向量字段名称
             description: 集合描述
-            auto_id: 是否自动生成ID
             timeout: 超时时间(秒)
-
-        Returns:
-            Collection: 创建的集合对象
         """
         try:
-            if await self.has_collection(collection_name):
+            if self.client.has_collection(collection_name=collection_name):
                 logger.warning(f"Collection {collection_name} already exists")
-                return Collection(collection_name)
+                return
 
-            # 获取文档元数据schema
-            doc_schema = get_doc_meta_schema()
+            # 使用定义的schema创建集合
+            schema: CollectionSchema = get_doc_meta_schema()
 
-            # 添加向量字段
-            doc_schema.fields.append(
-                FieldSchema(name=vector_field, dtype=DataType.FLOAT_VECTOR, dim=dim)
+            index_params = self.client.prepare_index_params()
+            index_params.add_index(
+                field_name="dense_vector",
+                index_name="dense_vector_index",
+                index_type="AUTOINDEX",
+                metric_type="IP",
             )
 
-            schema = doc_schema
-
-            collection = Collection(
-                name=collection_name, schema=schema, using=self.connection_alias
+            self.client.create_collection(
+                collection_name=collection_name,
+                schema=schema,
+                description=description,
+                timeout=timeout,
+                dimension=dim,
             )
 
-            logger.info(f"Successfully created collection {collection_name}")
-            return collection
-
+            logger.info(f"Successfully created collection {collection_name} with custom schema")
         except Exception as e:
-            logger.error(f"Failed to create collection {collection_name}: {str(e)}")
+            logger.exception(f"Failed to create collection {collection_name}:\n {e}")
             raise
 
     async def has_collection(self, collection_name: str) -> bool:
@@ -124,9 +110,9 @@ class AsyncMilvusManager:
             bool: 如果集合存在返回True，否则返回False
         """
         try:
-            return utility.has_collection(collection_name, using=self.connection_alias)
+            return self.client.has_collection(collection_name=collection_name)
         except Exception as e:
-            logger.error(f"Failed to check collection existence: {str(e)}")
+            logger.exception(f"Failed to check collection existence: {e}")
             raise
 
     async def drop_collection(self, collection_name: str) -> None:
@@ -137,15 +123,15 @@ class AsyncMilvusManager:
             collection_name: 要删除的集合名称
         """
         try:
-            if not await self.has_collection(collection_name):
+            if not self.client.has_collection(collection_name=collection_name):
                 logger.warning(f"Collection {collection_name} does not exist")
                 return
 
-            utility.drop_collection(collection_name, using=self.connection_alias)
+            self.client.drop_collection(collection_name=collection_name)
             logger.info(f"Successfully dropped collection {collection_name}")
 
         except Exception as e:
-            logger.error(f"Failed to drop collection {collection_name}: {str(e)}")
+            logger.exception(f"Failed to drop collection {collection_name}: \n{e}")
             raise
 
     async def list_collections(self) -> List[str]:
@@ -156,7 +142,7 @@ class AsyncMilvusManager:
             List[str]: 集合名称列表
         """
         try:
-            collections = utility.list_collections(using=self.connection_alias)
+            collections = self.client.list_collections()
             return collections
         except Exception as e:
             logger.error(f"Failed to list collections: {str(e)}")
@@ -165,173 +151,138 @@ class AsyncMilvusManager:
     async def insert(
         self,
         collection_name: str,
-        vectors: Union[List[List[float]], np.ndarray],
-        ids: Optional[List[int]] = None,
-        partition_name: Optional[str] = None,
+        data: List[Dict],
         timeout: Optional[float] = None,
-    ) -> List[int]:
+    ) -> Dict:
         """
-        向集合中插入向量
+        向集合中插入数据
 
         Args:
             collection_name: 集合名称
-            vectors: 要插入的向量列表或numpy数组
-            ids: 向量ID列表（如果auto_id=False则必须提供）
-            partition_name: 分区名称（可选）
+            data: 要插入的数据列表
             timeout: 超时时间（秒）
 
         Returns:
-            List[int]: 插入的向量ID列表
+            Dict: 插入结果
         """
         try:
-            collection = Collection(collection_name)
-            if not collection.is_empty:
-                collection.load()
+            result = self.client.insert(collection_name=collection_name, data=data, timeout=timeout)
 
-            # 准备数据
-            entities = []
-            if ids is not None:
-                entities.append(ids)
-
-            if isinstance(vectors, np.ndarray):
-                vectors = vectors.tolist()
-            entities.append(vectors)
-
-            # 执行插入
-            insert_result = collection.insert(
-                entities, partition_name=partition_name, timeout=timeout
-            )
-
-            logger.info(
-                f"Successfully inserted {len(vectors)} vectors into collection {collection_name}"
-            )
-            return insert_result.primary_keys
+            logger.info(f"Successfully inserted {len(data)} records into collection {collection_name}")
+            return result
 
         except Exception as e:
-            logger.error(f"Failed to insert vectors: {str(e)}")
+            logger.error(f"Failed to insert data: {str(e)}")
             raise
 
     async def delete(
         self,
         collection_name: str,
         expr: str,
-        partition_name: Optional[str] = None,
         timeout: Optional[float] = None,
-    ) -> None:
+    ) -> Dict:
         """
-        从集合中删除向量
+        从集合中删除数据
 
         Args:
             collection_name: 集合名称
             expr: 删除表达式，例如 "id in [1,2,3]"
-            partition_name: 分区名称（可选）
             timeout: 超时时间（秒）
+
+        Returns:
+            Dict: 删除结果
         """
         try:
-            collection = Collection(collection_name)
-            if not collection.is_empty:
-                collection.load()
+            result = self.client.delete(collection_name=collection_name, filter=expr, timeout=timeout)
 
-            collection.delete(expr, partition_name=partition_name, timeout=timeout)
-            logger.info(f"Successfully deleted vectors with expression: {expr}")
+            logger.info(f"Successfully deleted records with expression: {expr}")
+            return result
 
         except Exception as e:
-            logger.error(f"Failed to delete vectors: {str(e)}")
+            logger.error(f"Failed to delete records: {str(e)}")
             raise
 
     async def search(
         self,
         collection_name: str,
-        vector: Union[List[float], np.ndarray],
-        top_k: int = 10,
+        data: Union[List[List[float]], np.ndarray],
+        limit: int = 10,
         expr: Optional[str] = None,
         output_fields: Optional[List[str]] = None,
-        partition_names: Optional[List[str]] = None,
         timeout: Optional[float] = None,
-        **kwargs,
-    ) -> List[Dict]:
+        search_params: Optional[Dict] = None,
+    ) -> List[List[Dict]]:
         """
         向量相似度搜索
 
         Args:
             collection_name: 集合名称
-            vector: 查询向量
-            top_k: 返回最相似的前k个结果
+            data: 查询向量数据
+            limit: 返回最相似的前k个结果
             expr: 过滤表达式
             output_fields: 返回的字段列表
-            partition_names: 搜索的分区列表
             timeout: 超时时间（秒）
-            **kwargs: 其他搜索参数
+            search_params: 搜索参数
 
         Returns:
-            List[Dict]: 搜索结果列表
+            List[List[Dict]]: 搜索结果列表
         """
         try:
-            # 确保已经连接
-            if not connections.get_connection(self.connection_alias):
-                await self._connect()
+            # 转换为列表格式
+            if isinstance(data, np.ndarray):
+                processed_data: List[List[float]] = data.tolist()
+            else:
+                processed_data = list(data)
 
-            collection = Collection(collection_name)
-            collection.load()
+            # 确保data是二维列表
+            if len(processed_data) > 0 and not isinstance(processed_data[0], list):
+                processed_data = [cast(List[float], processed_data)]
 
-            # 准备搜索参数
-            search_params = {
-                "metric_type": "L2",  # 默认使用L2距离
-                "params": {"nprobe": 10},  # 默认nprobe值
-            }
-            search_params.update(kwargs)
-
-            # 如果输入是numpy数组，转换为列表
-            if isinstance(vector, np.ndarray):
-                vector = vector.tolist()
-
-            # 确保vector是二维的
-            if not isinstance(vector[0], (list, np.ndarray)):
-                vector = [vector]
-
-            # 执行异步搜索
-            search_future = collection.search(
-                data=vector,
-                anns_field="embedding",  # 假设向量字段名为"embedding"
-                param=search_params,
-                limit=top_k,
-                expr=expr,
+            # 执行搜索
+            search_result = self.client.search(
+                collection_name=collection_name,
+                data=processed_data,
+                limit=limit,
+                filter=expr or "",
                 output_fields=output_fields,
-                partition_names=partition_names,
                 timeout=timeout,
-                _async=True,  # 启用异步模式
+                search_params=search_params or {"metric_type": "L2", "params": {"nprobe": 10}},
             )
 
-            # 等待搜索结果
-            search_result = search_future.result()
-
-            # 格式化返回结果
-            formatted_results = []
-            # 获取第一个查询的结果 (因为我们只搜索了一个向量)
-            first_hits = search_result[0]  # Hits对象
-
-            # 遍历命中结果
-            for id, distance in zip(first_hits.ids, first_hits.distances):
-                result = {
-                    "id": id,
-                    "distance": distance,
-                }
-                # 如果指定了output_fields并且结果中有entity
-                if output_fields and hasattr(first_hits[0], "entity"):
-                    result.update(first_hits[0].entity)
-                formatted_results.append(result)
-
-            return formatted_results
+            logger.info(f"Successfully performed search in collection {collection_name}")
+            return search_result
 
         except Exception as e:
             logger.error(f"Failed to perform search: {str(e)}")
             raise
 
-    def close(self) -> None:
-        """关闭与Milvus的连接"""
+    async def query(
+        self,
+        collection_name: str,
+        expr: str,
+        output_fields: Optional[List[str]] = None,
+        timeout: Optional[float] = None,
+    ) -> List[Dict]:
+        """
+        查询数据
+
+        Args:
+            collection_name: 集合名称
+            expr: 查询表达式
+            output_fields: 返回的字段列表
+            timeout: 超时时间（秒）
+
+        Returns:
+            List[Dict]: 查询结果列表
+        """
         try:
-            connections.disconnect(self.connection_alias)
-            logger.info("Successfully disconnected from Milvus")
+            result = self.client.query(
+                collection_name=collection_name, filter=expr, output_fields=output_fields, timeout=timeout
+            )
+
+            logger.info(f"Successfully queried records with expression: {expr}")
+            return result
+
         except Exception as e:
-            logger.error(f"Failed to disconnect from Milvus: {str(e)}")
+            logger.error(f"Failed to query records: {str(e)}")
             raise
